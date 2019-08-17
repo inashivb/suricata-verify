@@ -117,15 +117,31 @@ def pipe_reader(fileobj, output=None, verbose=False):
             print(line.strip())
 
 
+def check_conditions(kwargs, rtype, err):
+    conditions = kwargs["conditions"]
+    if args.test_skip and conditions:
+        for condition in conditions:
+            print("{}. {}{}{}".format(rtype.upper(),
+                "Requires " if rtype == "failed" else "Is ", condition,
+                " required?" if rtype == "passed" else "."))
+            kwargs["count"]["skipped_{}".format(rtype)] += 1
+    else:
+        if rtype == "failed":
+            print("Sub test #{}: {} : {}".format(kwargs["test_num"],
+                                                 rtype.upper(), err))
+            check_args_fail()
+        kwargs["count"][rtype] += 1
+
+    return kwargs
+
+
 def handle_exceptions(func):
     def applicator(*args, **kwargs):
         result = False
         try:
             result = func(*args,**kwargs)
         except TestError as te:
-            print("Sub test #{}: FAIL : {}".format(kwargs["test_num"], te))
-            check_args_fail()
-            kwargs["count"]["failure"] += 1
+            check_conditions(kwargs, "failed", err=te)
         except UnsatisfiedRequirementError as ue:
             print("Sub test #{}: SKIPPED : {}".format(kwargs["test_num"], ue))
             kwargs["count"]["skipped"] += 1
@@ -381,6 +397,7 @@ class TestRunner:
         self.verbose = verbose
         self.force = force
         self.output = outdir
+        self.conditions = list()
 
         # The name is just the directory name.
         self.name = os.path.basename(self.directory)
@@ -475,10 +492,18 @@ class TestRunner:
                     raise UnsatisfiedRequirementError(
                             "only for version {}".format(req_version))
             elif key == "features":
-                for feature in requires["features"]:
-                    if not self.suricata_config.has_feature(feature):
-                        raise UnsatisfiedRequirementError(
-                            "requires feature %s" % (feature))
+                features = None
+                if args.test_skip:
+                    skip_test_features = args.test_skip.split(",")
+                    features = [feat for feat in skip_test_features \
+                            for rfeat in requires["features"] if feat == rfeat]
+                if features:
+                    self.conditions = features
+                else:
+                    for rfeat in requires["features"]:
+                        if not self.suricata_config.has_feature(rfeat):
+                            raise UnsatisfiedRequirementError(
+                            "requires feature %s" % (rfeat))
 
             elif key == "env":
                 for env in requires["env"]:
@@ -514,7 +539,6 @@ class TestRunner:
                     if not found:
                         raise UnsatisfiedRequirementError(
                             "requires %s = %s" % (pattern, need_val))
-
             elif key == "pcap":
                 # Handle below...
                 pass
@@ -631,18 +655,18 @@ class TestRunner:
             subprocess.call(self.config["pre-check"], shell=True)
 
     @handle_exceptions
-    def perform_filter_checks(self, check, count, test_num):
+    def perform_filter_checks(self, check, count, test_num, conditions):
         count = FilterCheck(check, self.output,
                 self.suricata_config.version).run()
         return count
 
     @handle_exceptions
-    def perform_shell_checks(self, check, count, test_num):
+    def perform_shell_checks(self, check, count, test_num, conditions):
         count = ShellCheck(check).run()
         return count
 
     @handle_exceptions
-    def perform_stats_checks(self, check, count, test_num):
+    def perform_stats_checks(self, check, count, test_num, conditions):
         count = StatsCheck(check, self.output).run()
         return count
 
@@ -654,10 +678,12 @@ class TestRunner:
         pdir = os.getcwd()
         os.chdir(self.output)
         count = {
-            "success": 0,
-            "failure": 0,
+            "passed": 0,
+            "failed": 0,
             "skipped": 0,
             "check_sh": 0,
+            "skipped_passed": 0,
+            "skipped_failed": 0,
                 }
         try:
             self.pre_check()
@@ -668,13 +694,15 @@ class TestRunner:
                         if key in ["filter", "shell", "stats"]:
                             func = getattr(self, "perform_{}_checks".format(key))
                             count = func(check=check[key], count=count,
-                                    test_num=check_count + 1)
+                                    test_num=check_count + 1,
+                                    conditions=self.conditions)
                         else:
                             print("FAIL: Unknown check type: {}".format(key))
         finally:
             os.chdir(pdir)
 
-        if count["failure"] or count["skipped"]:
+        if count["failed"] or count["skipped"] or \
+                count["skipped_passed"] or count["skipped_passed"]:
             return count
 
         # Old style check script.
@@ -682,11 +710,11 @@ class TestRunner:
         os.chdir(self.output)
         try:
             if not os.path.exists(os.path.join(self.directory, "check.sh")):
-                success_c = count["success"]
+                success_c = count["passed"]
                 # Covering cases like "tests/show-help" which do not have
                 # check.sh and/or no checks in test.yaml should be counted
                 # successful
-                count["success"] = 1 if not success_c else success_c
+                count["passed"] = 1 if not success_c else success_c
                 return count
             extraenv = {
                 # The suricata source directory.
@@ -703,11 +731,11 @@ class TestRunner:
                 [os.path.join(self.directory, "check.sh")], env=env)
             if r != 0:
                 print("FAILED: verification failed")
-                count["failure"] = 1
+                count["failed"] = 1
                 count["check_sh"] = 1
                 return count
             else:
-                count["success"] = 1
+                count["passed"] = 1
             return count
         finally:
             os.chdir(pdir)
@@ -834,6 +862,8 @@ def main():
                         help="Force running of skipped tests")
     parser.add_argument("--fail", action="store_true",
                         help="Exit on test failure")
+    parser.add_argument("--test-skip", nargs="?", default=None,
+                        help="Test the skipped tests for the given feature")
     parser.add_argument("--testdir", action="store",
                         help="Runs tests from custom directory")
     parser.add_argument("--skip-tests", nargs="?", default=None,
@@ -857,6 +887,8 @@ def main():
     skipped = 0
     passed = 0
     failed = 0
+    skipped_passed = 0
+    skipped_failed = 0
 
     # Get the current working directory, which should be the top
     # suricata source directory.
@@ -927,6 +959,11 @@ def main():
                 skipped += 1
             elif results["success"] > 0:
                 passed += 1
+            else:
+                if results["skipped_passed"] > 0:
+                    skipped_passed += results["skipped_passed"]
+                if results["skipped_failed"] > 0:
+                    skipped_failed += results["skipped_failed"]
         except UnsatisfiedRequirementError as ue:
             print("SKIPPED: {}".format(ue))
             skipped += 1
@@ -939,6 +976,8 @@ def main():
     print("PASSED:  %d" % (passed))
     print("FAILED:  %d" % (failed))
     print("SKIPPED: %d" % (skipped))
+    print("SKIPPED OK: %d" % (skipped_passed))
+    print("SKIPPED FAIL: %d" % (skipped_failed))
 
     if args.debugfailed:
         if len(failedLogs) > 0:
