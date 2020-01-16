@@ -129,8 +129,10 @@ def pipe_reader(fileobj, output=None, verbose=False):
 
 def handle_exceptions(func):
     def applicator(*args, **kwargs):
+        import ipdb
+        ipdb.set_trace()
         try:
-            func(*args,**kwargs)
+            ret = func(*args,**kwargs)
         except TestError as te:
             print("Sub test #{}: FAIL : {}".format(kwargs["test_num"], te))
             check_args_fail()
@@ -139,7 +141,10 @@ def handle_exceptions(func):
             print("Sub test #{}: SKIPPED : {}".format(kwargs["test_num"], ue))
             kwargs["count"]["skipped"] += 1
         else:
-            kwargs["count"]["success"] += 1
+            if ret:
+                kwargs["count"]["failure"] +=1
+            else:
+                kwargs["count"]["success"] += 1
         return kwargs["count"]
     return applicator
 
