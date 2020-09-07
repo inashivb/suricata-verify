@@ -119,11 +119,16 @@ def pipe_reader(fileobj, output=None, verbose=False):
 
 def check_conditions(kwargs, rtype, err):
     conditions = kwargs["conditions"]
+#    import ipdb
+#    ipdb.set_trace()
     if args.test_skip and conditions:
+        all_passed = True
         for condition in conditions:
-            print("{}. {}{}{}".format(rtype.upper(),
-                "Requires " if rtype == "failed" else "Is ", condition,
-                " required?" if rtype == "passed" else "."))
+            all_passed &= True if rtype == "failed" else False
+            if not rtype == "passed":
+                print("{}. {}{}{}".format(rtype.upper(),
+                    "Requires " if rtype == "failed" else "Is ", condition,
+                    " required?" if rtype == "passed" else "."))
             kwargs["count"]["skipped_{}".format(rtype)] += 1
     else:
         if rtype == "failed":
@@ -137,6 +142,7 @@ def check_conditions(kwargs, rtype, err):
 
 def handle_exceptions(func):
     def applicator(*args, **kwargs):
+#        print("Inside applicator")
         result = False
         try:
             result = func(*args,**kwargs)
@@ -147,10 +153,12 @@ def handle_exceptions(func):
             kwargs["count"]["skipped"] += 1
         else:
             if result:
-              kwargs["count"]["success"] += 1
+#              kwargs["count"]["passed"] += 1
+              check_conditions(kwargs, "passed", err=None)
             else:
-              print("\nSub test #{}: FAIL : {}".format(kwargs["test_num"], kwargs["check"]["args"]))
-              kwargs["count"]["failure"] += 1
+#              print("\nSub test #{}: FAIL : {}".format(kwargs["test_num"], kwargs["check"]["args"]))
+#              kwargs["count"]["failed"] += 1
+              check_conditions(kwargs, "failed", err=None)
         return kwargs["count"]
     return applicator
 
@@ -493,6 +501,8 @@ class TestRunner:
                             "only for version {}".format(req_version))
             elif key == "features":
                 features = None
+#                import ipdb
+#                ipdb.set_trace()
                 if args.test_skip:
                     skip_test_features = args.test_skip.split(",")
                     features = [feat for feat in skip_test_features \
@@ -500,6 +510,7 @@ class TestRunner:
                 if features:
                     self.conditions = features
                 else:
+                    print("In here. Features: {}".format(requires["features"]))
                     for rfeat in requires["features"]:
                         if not self.suricata_config.has_feature(rfeat):
                             raise UnsatisfiedRequirementError(
@@ -563,9 +574,11 @@ class TestRunner:
         sys.stdout.write("===> %s: " % os.path.basename(self.directory))
         sys.stdout.flush()
 
+#        import ipdb
+#        ipdb.set_trace()
         if not self.force:
-            self.check_requires()
             self.check_skip()
+            self.check_requires()
 
         if WIN32 and os.path.exists(os.path.join(self.directory, "check.sh")):
             raise UnsatisfiedRequirementError("check.sh tests are not supported on Windows")
@@ -644,9 +657,9 @@ class TestRunner:
             if check_value["check_sh"]:
                 return check_value
 
-        if not check_value["failure"] and not check_value["skipped"]:
+        if not check_value["failed"] and not check_value["skipped"]:
             print("OK%s" % (" (%dx)" % count if count > 1 else ""))
-        elif not check_value["failure"]:
+        elif not check_value["failed"]:
             print("OK (checks: {}, skipped: {})".format(sum(check_value.values()), check_value["skipped"]))
         return check_value
 
@@ -656,6 +669,7 @@ class TestRunner:
 
     @handle_exceptions
     def perform_filter_checks(self, check, count, test_num, conditions):
+#        print("Inside perform_filter_checks")
         count = FilterCheck(check, self.output,
                 self.suricata_config.version).run()
         return count
@@ -691,8 +705,10 @@ class TestRunner:
                 self.reset_count(count)
                 for check_count, check in enumerate(self.config["checks"]):
                     for key in check:
+#                        print(key)
                         if key in ["filter", "shell", "stats"]:
                             func = getattr(self, "perform_{}_checks".format(key))
+#                            print(func)
                             count = func(check=check[key], count=count,
                                     test_num=check_count + 1,
                                     conditions=self.conditions)
@@ -952,18 +968,18 @@ def main():
             cwd, dirpath, outdir, suricata_config, args.verbose, args.force)
         try:
             results = test_runner.run()
-            if results["failure"] > 0:
+            if results["failed"] > 0:
                 failed += 1
                 failedLogs.append(dirpath)
-            elif results["skipped"] > 0 and results["success"] == 0:
+            elif results["skipped"] > 0 and results["passed"] == 0:
                 skipped += 1
-            elif results["success"] > 0:
+            elif results["passed"] > 0:
                 passed += 1
             else:
                 if results["skipped_passed"] > 0:
-                    skipped_passed += results["skipped_passed"]
+                    skipped_passed += 1
                 if results["skipped_failed"] > 0:
-                    skipped_failed += results["skipped_failed"]
+                    skipped_failed += 1
         except UnsatisfiedRequirementError as ue:
             print("SKIPPED: {}".format(ue))
             skipped += 1
