@@ -4,7 +4,7 @@
 flow:
   rate-tracking:
     bytes: 10KiB
-    interval: 10
+    interval: 9
 
 outputs:
   - eve-log:
