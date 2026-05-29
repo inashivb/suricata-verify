@@ -1,0 +1,36 @@
+requires:
+    min-version: 9
+
+pcap: false
+
+args:
+  - --engine-analysis
+
+# The only topologically valid order is 1,2,3,4 (sid 3 sets C, sid 4 issets
+# C, so 3 must precede 4). The current BFS-based resolver emits 1,4,2,3,
+# placing sid 4 ahead of its dependency sid 3, so these checks fail.
+checks:
+- filter:
+    filename: rules.json
+    count: 1
+    match:
+      __lineno: 1
+      id: 1
+- filter:
+    filename: rules.json
+    count: 1
+    match:
+      __lineno: 2
+      id: 2
+- filter:
+    filename: rules.json
+    count: 1
+    match:
+      __lineno: 3
+      id: 3
+- filter:
+    filename: rules.json
+    count: 1
+    match:
+      __lineno: 4
+      id: 4
